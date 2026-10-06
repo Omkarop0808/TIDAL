@@ -33,6 +33,9 @@
   .text-glow {
     text-shadow: 0 0 20px theme('colors.primary-container' / 50%);
   }
+  .map-tiles {
+    filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+  }
 }
 
 ::-webkit-scrollbar {

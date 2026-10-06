@@ -1,6 +1,14 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
+import { motion, AnimatePresence } from 'framer-motion';
+import type { Variants } from 'framer-motion';
+import { ArrowRight, Activity, AlertTriangle, Users, BarChart3, Wifi } from 'lucide-react';
+import { IntelligenceMap } from '../components/IntelligenceMap';
+import { ProtocolAlphaOverlay } from '../components/ProtocolAlphaOverlay';
+import { FleetCommandPanel } from '../components/FleetCommandPanel';
+import { DebrisAnalysisPanel } from '../components/DebrisAnalysisPanel';
+import { useLiveFeed } from '../hooks/useLiveFeed';
 
 interface TelemetrySummary {
   predicted_debris: number;
@@ -16,9 +24,28 @@ interface TelemetrySummary {
 
 const Overview = () => {
   const [data, setData] = useState<TelemetrySummary | null>(null);
+  const [weatherData, setWeatherData] = useState<any>(null);
+  const [isAlphaOpen, setIsAlphaOpen] = useState(false);
+  const [isFleetOpen, setIsFleetOpen] = useState(false);
+  const [isReleasing, setIsReleasing] = useState(false);
+  const [debrisMultiplier, setDebrisMultiplier] = useState(0);
+  const [activeLayers, setActiveLayers] = useState<string[]>(['Debris']);
+  
+  // OceanEye Integration State
+  const [isAnalysisOpen, setIsAnalysisOpen] = useState(false);
+  const [selectedActivityId, setSelectedActivityId] = useState<string | undefined>();
+
+  // Use the new websocket hook
+  const { data: liveData, isConnected } = useLiveFeed('ws://localhost:8000/ws/live');
 
   useEffect(() => {
-    const fetchData = async () => {
+    if (liveData?.weather) {
+      setWeatherData(liveData.weather);
+    }
+  }, [liveData]);
+
+  useEffect(() => {
+    const fetchTelemetry = async () => {
       try {
         const response = await axios.get('http://localhost:8000/api/v1/telemetry/summary');
         setData(response.data);
@@ -26,226 +53,314 @@ const Overview = () => {
         console.error('Error fetching telemetry summary:', error);
       }
     };
-    fetchData();
-    const interval = setInterval(fetchData, 5000); // Poll every 5s for the live effect
-    return () => clearInterval(interval);
+
+    fetchTelemetry();
+    const interval = setInterval(fetchTelemetry, 5000);
+    return () => {
+      clearInterval(interval);
+    };
   }, []);
 
+  const handleReleaseDebris = () => {
+    if (isReleasing) return;
+    setIsReleasing(true);
+    setTimeout(() => {
+      setDebrisMultiplier(prev => prev + 1);
+      setIsReleasing(false);
+    }, 2000);
+  };
+
+  const toggleLayer = (layer: string) => {
+    setActiveLayers(prev => 
+      prev.includes(layer) 
+        ? prev.filter(l => l !== layer)
+        : [...prev, layer]
+    );
+  };
+
+  // Derived metrics incorporating simulated debris drops
+  const predictedDebris = data ? ((data.predicted_debris / 1000) + (debrisMultiplier * 1.2)).toFixed(1) : '--';
+  const highRiskZones = data ? data.high_risk_zones + debrisMultiplier : '--';
+
+  // Motion variants
+  const fadeUp: Variants = {
+    hidden: { opacity: 0, y: 40 },
+    visible: (custom: number) => ({
+      opacity: 1,
+      y: 0,
+      transition: { delay: custom * 0.1, duration: 0.8, ease: "easeOut" }
+    })
+  };
+
   return (
-    <div className="flex flex-col w-full text-on-surface">
-      {/* Top Section: Header & KPIs */}
-      <div className="px-gutter pt-gutter pb-space-md flex flex-col gap-6">
-        {/* Subtitle & Actions Row */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex flex-col gap-1">
-            <span className="text-label-md font-label-md text-primary tracking-widest uppercase">Digital Twin Status</span>
-            <h1 className="text-headline-lg font-headline-lg text-on-surface">Marine Debris Intelligence for Mumbai Coast</h1>
-            <p className="text-body-md font-body-md text-on-surface-variant">Real-time telemetry, hydrodynamic modeling, and automated asset coordination.</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-primary-container to-secondary-container text-on-secondary-container font-headline-sm flex items-center gap-2 hover:opacity-90 transition-opacity shadow-[0_0_20px_rgba(0,242,254,0.3)]">
-              <span className="material-symbols-outlined text-[18px]">add_circle</span>
-              + Release Debris
+    <main className="w-full bg-background min-h-screen text-on-surface overflow-x-hidden selection:bg-primary-container selection:text-on-primary-container">
+      
+      {/* Modals & Overlays */}
+      <ProtocolAlphaOverlay isOpen={isAlphaOpen} onClose={() => setIsAlphaOpen(false)} />
+      <FleetCommandPanel isOpen={isFleetOpen} onClose={() => setIsFleetOpen(false)} />
+      <DebrisAnalysisPanel 
+        isOpen={isAnalysisOpen} 
+        onClose={() => setIsAnalysisOpen(false)} 
+        activityId={selectedActivityId} 
+      />
+
+      {/* ATTENTION: Hero Section (Editorial Split) */}
+      <section className="px-6 md:px-12 pt-32 pb-24 md:pb-40 max-w-[1600px] mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-8 items-end">
+        <motion.div 
+          custom={0} initial="hidden" animate="visible" variants={fadeUp}
+          className="lg:col-span-7 flex flex-col gap-8"
+        >
+          <h1 className="text-5xl md:text-7xl lg:text-8xl font-headline-xl tracking-tighter leading-[1.05] text-on-surface">
+            Marine Debris <br />
+            <span className="text-primary-container italic">Intelligence.</span>
+          </h1>
+        </motion.div>
+        
+        <motion.div 
+          custom={1} initial="hidden" animate="visible" variants={fadeUp}
+          className="lg:col-span-5 flex flex-col gap-8 lg:pb-4"
+        >
+          <p className="text-lg md:text-xl font-body-lg text-on-surface-variant max-w-md leading-relaxed">
+            Real-time telemetry, hydrodynamic modeling, and automated asset coordination for the Mumbai Coast.
+          </p>
+          <div className="flex flex-col sm:flex-row items-start gap-4">
+            <button 
+              onClick={handleReleaseDebris}
+              disabled={isReleasing}
+              className="px-8 py-4 rounded-full bg-primary-container text-on-primary-container font-headline-sm flex items-center gap-3 hover:scale-105 transition-transform duration-500 ease-out shadow-2xl shadow-primary-container/20 disabled:opacity-50 disabled:hover:scale-100"
+            >
+              {isReleasing ? 'Simulating...' : 'Release Debris'}
+              <ArrowRight className="w-5 h-5" />
             </button>
-            <Link to="/simulate" className="px-4 py-2.5 rounded-xl bg-surface-container-high text-on-surface font-headline-sm flex items-center gap-2 hover:bg-surface-bright transition-colors">
-              <span className="material-symbols-outlined text-[18px]">bolt</span>
-              Simulate 72 Hours
+            <Link to="/simulate" className="px-8 py-4 rounded-full bg-surface-container-high text-on-surface font-headline-sm flex items-center gap-3 hover:bg-surface-bright hover:scale-105 transition-all duration-500 ease-out border border-outline-variant/20">
+              Simulate 72h
             </Link>
           </div>
-        </div>
-        
-        {/* Top KPI Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="p-5 rounded-2xl glass-panel glass-panel-hover flex flex-col justify-between gap-3 group relative overflow-hidden">
-            <div className="flex items-center justify-between text-on-surface-variant">
-              <span className="text-label-md font-label-md uppercase">Predicted Debris</span>
-              <span className="material-symbols-outlined text-primary-container">delete_sweep</span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-headline-xl font-headline-xl text-primary">{data ? (data.predicted_debris / 1000).toFixed(1) : '--'}</span>
-              <span className="text-body-md font-body-md text-on-surface-variant">tons</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-label-sm font-label-sm text-emerald-400">
-              <span className="material-symbols-outlined text-[14px]">trending_down</span>
-              -4.2% vs yesterday
-            </div>
-          </div>
+        </motion.div>
+      </section>
 
-          <div className="p-5 rounded-2xl glass-panel glass-panel-hover flex flex-col justify-between gap-3 group relative overflow-hidden">
-            <div className="absolute -right-10 -bottom-10 w-32 h-32 bg-primary-container/10 rounded-full blur-2xl group-hover:bg-primary-container/20 transition-all"></div>
-            <div className="flex items-center justify-between text-on-surface-variant">
-              <span className="text-label-md font-label-md uppercase">High-Risk Zones</span>
-              <span className="material-symbols-outlined text-error">warning</span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-headline-xl font-headline-xl text-error">{data ? data.high_risk_zones : '-'}</span>
-              <span className="text-body-md font-body-md text-on-surface-variant">sectors critical</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-label-sm font-label-sm text-error">
-              <span className="material-symbols-outlined text-[14px]">priority_high</span>
-              Active threats detected
-            </div>
-          </div>
-
-          <div className="p-5 rounded-2xl glass-panel glass-panel-hover flex flex-col justify-between gap-3 group relative overflow-hidden">
-            <div className="absolute -right-10 -bottom-10 w-32 h-32 bg-primary-container/10 rounded-full blur-2xl group-hover:bg-primary-container/20 transition-all"></div>
-            <div className="flex items-center justify-between text-on-surface-variant">
-              <span className="text-label-md font-label-md uppercase">Cleanup Teams</span>
-              <span className="material-symbols-outlined text-secondary">groups</span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-headline-xl font-headline-xl text-secondary">{data ? data.cleanup_teams_active : '-'}</span>
-              <span className="text-body-md font-body-md text-on-surface-variant">active units</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-label-sm font-label-sm text-primary-fixed">
-              <span className="material-symbols-outlined text-[14px]">check_circle</span>
-              All operational
-            </div>
-          </div>
-
-          <div className="p-5 rounded-2xl glass-panel glass-panel-hover flex flex-col justify-between gap-3 group relative overflow-hidden">
-            <div className="absolute -right-10 -bottom-10 w-32 h-32 bg-primary-container/10 rounded-full blur-2xl group-hover:bg-primary-container/20 transition-all"></div>
-            <div className="flex items-center justify-between text-on-surface-variant">
-              <span className="text-label-md font-label-md uppercase">Recovery Potential</span>
-              <span className="material-symbols-outlined text-primary">eco</span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-headline-xl font-headline-xl text-primary">{data ? data.recovery_potential : '--'}%</span>
-              <span className="text-body-md font-body-md text-on-surface-variant">efficiency</span>
-            </div>
-            <div className="w-full bg-surface-container-high h-1.5 rounded-full overflow-hidden">
-              <div className="bg-primary-container h-full rounded-full transition-all duration-500" style={{ width: `${data ? data.recovery_potential : 0}%` }}></div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content Grid: Map & Intelligence Panel */}
-      <div className="px-gutter pb-gutter grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Interactive Digital Map (8 Cols) */}
-        <div className="lg:col-span-8 relative rounded-2xl overflow-hidden bg-surface-container-lowest min-h-[600px] flex flex-col shadow-2xl">
-          <div className="absolute inset-0 bg-cover bg-center opacity-80" style={{ backgroundImage: "url('https://lh3.googleusercontent.com/aida-public/AB6AXuAJpZMSV54ZEv3f5Y7aX63J4JpNI52yWc12851q4wn8Q2cwqmjo_fmXMKjzWDW-Uh7UF-QjPZSqIIG8c8_AJ2AoKYsWrmsI9DTll23Ezv0C96nnuKh79if0qbtHQsdZBNoZKyBc2FNWcYoG54Kised9BNpaCBBNhQAxRPcAHKGRUGlkfHfTSC6RKs69rGg9o40yDz4s64oiwdOIToR5BZnZJAkCJ50N6F8OqJCeQAMe0bNixtpBqoMifg')" }}></div>
-          <div className="absolute inset-0 bg-gradient-to-t from-surface via-transparent to-surface/40 pointer-events-none"></div>
+      {/* INTEREST: Gapless Bento Grid */}
+      <section className="px-6 md:px-12 py-24 md:py-32 w-full max-w-[1600px] mx-auto">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 grid-flow-dense">
           
-          <div className="relative z-10 p-4 flex items-center justify-between pointer-events-none">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface/80 backdrop-blur-md pointer-events-auto border border-outline-variant/20">
-              <span className="w-2 h-2 rounded-full bg-primary-container animate-ping"></span>
-              <span className="text-label-md font-label-md text-primary">HYDRO-MESH ACTIVE</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="px-3 py-1.5 rounded-lg bg-surface/80 backdrop-blur-md text-label-md font-label-md text-on-surface-variant border border-outline-variant/20">Lat: 18.9750° N, Lon: 72.8258° E</span>
-            </div>
-          </div>
-          
-          <div className="absolute top-20 right-4 z-20 flex flex-col gap-2">
-            <div className="flex flex-col rounded-xl bg-surface/90 backdrop-blur-md overflow-hidden border border-outline-variant/20 shadow-lg">
-              <button className="p-2.5 hover:bg-surface-container-high text-on-surface transition-colors border-b border-outline-variant/10" title="Zoom In"><span className="material-symbols-outlined text-[20px]">add</span></button>
-              <button className="p-2.5 hover:bg-surface-container-high text-on-surface transition-colors" title="Zoom Out"><span className="material-symbols-outlined text-[20px]">remove</span></button>
-            </div>
-            <div className="flex flex-col gap-1 p-2 rounded-xl bg-surface/90 backdrop-blur-md border border-outline-variant/20 shadow-lg">
-              <span className="text-label-sm font-label-sm text-on-surface-variant uppercase px-2 py-1">Layers</span>
-              {['Current', 'Wind', 'Rainfall', 'Tide', 'Debris', 'Cleanup Teams'].map(layer => (
-                <label key={layer} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-container-high text-body-sm cursor-pointer">
-                  <input defaultChecked className="accent-primary-container" type="checkbox" /> {layer}
-                </label>
-              ))}
-            </div>
-          </div>
-          
-          <div className="relative z-10 mt-auto p-4 flex flex-wrap items-center gap-4 bg-surface/80 backdrop-blur-md border-t border-outline-variant/20">
-            <span className="text-label-md font-label-md uppercase text-on-surface-variant">Risk Zones:</span>
-            <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-emerald-500"></span><span className="text-body-sm">Low</span></div>
-            <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-amber-400"></span><span className="text-body-sm">Moderate</span></div>
-            <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-orange-500"></span><span className="text-body-sm">High</span></div>
-            <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-red-500 animate-pulse"></span><span className="text-body-sm">Critical</span></div>
-          </div>
-        </div>
-
-        {/* Right-side Intelligence Panel (4 Cols) */}
-        <div className="lg:col-span-4 flex flex-col gap-6">
-          <div className="p-6 rounded-2xl glass-panel glass-panel-hover flex flex-col gap-5">
-            <div className="flex items-center justify-between border-b border-outline-variant/20 pb-4">
-              <h2 className="text-headline-sm font-headline-sm text-on-surface">Coastal Intelligence</h2>
-              <span className="material-symbols-outlined text-primary-container">analytics</span>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-3 rounded-xl bg-surface-container/50 flex flex-col gap-1">
-                <span className="text-label-sm font-label-sm text-on-surface-variant uppercase">Tidal State</span>
-                <span className="text-headline-sm font-headline-sm text-primary flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-[18px]">trending_up</span> Rising
+          <motion.div custom={2} initial="hidden" whileInView="visible" viewport={{ once: true, margin: "-100px" }} variants={fadeUp} 
+            className="col-span-1 lg:col-span-2 row-span-2 p-8 md:p-12 rounded-3xl bg-surface-container-low border border-outline-variant/10 flex flex-col justify-between group overflow-hidden relative">
+            <div className="absolute inset-0 bg-gradient-to-br from-primary-container/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
+            <div className="relative z-10 flex flex-col h-full gap-16">
+              <div className="flex items-start justify-between">
+                <span className="text-on-surface-variant font-label-md tracking-widest uppercase">Predicted Debris</span>
+                <Activity className="w-6 h-6 text-primary-container" />
+              </div>
+              <div className="flex items-end gap-3">
+                <span className="text-7xl md:text-9xl font-headline-xl tracking-tighter text-on-surface">
+                  {predictedDebris}
                 </span>
-              </div>
-              <div className="p-3 rounded-xl bg-surface-container/50 flex flex-col gap-1">
-                <span className="text-label-sm font-label-sm text-on-surface-variant uppercase">Wind Vector</span>
-                <span className="text-headline-sm font-headline-sm text-on-surface">SW 18 km/h</span>
-              </div>
-              <div className="p-3 rounded-xl bg-surface-container/50 flex flex-col gap-1">
-                <span className="text-label-sm font-label-sm text-on-surface-variant uppercase">Rainfall</span>
-                <span className="text-headline-sm font-headline-sm text-on-surface">12 mm</span>
-              </div>
-              <div className="p-3 rounded-xl bg-surface-container/50 flex flex-col gap-1">
-                <span className="text-label-sm font-label-sm text-on-surface-variant uppercase">Current Velocity</span>
-                <span className="text-headline-sm font-headline-sm text-on-surface">0.8 m/s</span>
+                <span className="text-xl md:text-2xl text-on-surface-variant mb-3 md:mb-6">tons</span>
               </div>
             </div>
-            <div className="flex flex-col gap-3 pt-2">
-              <div className="flex items-center justify-between">
-                <span className="text-body-md font-body-md text-on-surface-variant">Next 24 Hours Accumulation</span>
-                <span className="text-label-md font-label-md text-error font-semibold">High Alert</span>
-              </div>
-              <p className="text-body-sm font-body-sm text-on-surface-variant">Elevated probability of debris concentration near <strong className="text-on-surface">Juhu</strong> and <strong className="text-on-surface">Versova</strong> due to converging tidal vectors.</p>
-            </div>
-            <div className="flex items-center justify-between pt-4 border-t border-outline-variant/20">
-              <span className="text-label-md font-label-md text-on-surface-variant uppercase">Prediction Confidence</span>
-              <span className="text-headline-sm font-headline-sm text-primary-container">87%</span>
-            </div>
-          </div>
+          </motion.div>
 
-          <div className="p-6 rounded-2xl bg-gradient-to-br from-surface-container-low to-surface-container flex flex-col gap-4 shadow-xl">
-            <h3 className="text-headline-sm font-headline-sm text-on-surface">Automated Dispatch</h3>
-            <p className="text-body-sm font-body-sm text-on-surface-variant">Deploy autonomous skimmers based on real-time accumulation probability vectors.</p>
-            <button className="w-full py-2.5 rounded-xl bg-surface-container-high text-primary hover:bg-surface-bright transition-colors font-headline-sm text-center">
-              Execute Protocol Alpha
-            </button>
-          </div>
+          <motion.div custom={3} initial="hidden" whileInView="visible" viewport={{ once: true, margin: "-100px" }} variants={fadeUp} 
+            className="p-8 rounded-3xl bg-surface-container border border-outline-variant/10 flex flex-col gap-6 group hover:bg-surface-container-high transition-colors duration-500">
+            <div className="flex items-center justify-between">
+              <span className="text-on-surface-variant font-label-md tracking-widest uppercase">High-Risk Zones</span>
+              <AlertTriangle className="w-5 h-5 text-error" />
+            </div>
+            <span className="text-5xl md:text-6xl font-headline-xl tracking-tighter text-error">
+              {highRiskZones}
+            </span>
+          </motion.div>
+
+          <motion.div 
+            custom={4} initial="hidden" whileInView="visible" viewport={{ once: true, margin: "-100px" }} variants={fadeUp} 
+            onClick={() => setIsFleetOpen(true)}
+            className="p-8 rounded-3xl bg-surface-container border border-outline-variant/10 flex flex-col gap-6 group hover:bg-surface-container-high hover:border-primary-container/50 transition-colors duration-500 cursor-pointer"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-on-surface-variant group-hover:text-primary-container transition-colors font-label-md tracking-widest uppercase">Cleanup Teams</span>
+              <Users className="w-5 h-5 text-secondary" />
+            </div>
+            <span className="text-5xl md:text-6xl font-headline-xl tracking-tighter text-secondary">
+              {data ? data.cleanup_teams_active : '-'}
+            </span>
+          </motion.div>
+
+          <motion.div custom={5} initial="hidden" whileInView="visible" viewport={{ once: true, margin: "-100px" }} variants={fadeUp} 
+            className="col-span-1 md:col-span-2 p-8 rounded-3xl bg-surface-container border border-outline-variant/10 flex flex-col gap-6 group overflow-hidden hover:bg-surface-container-high transition-colors duration-500">
+            <div className="flex items-center justify-between">
+              <span className="text-on-surface-variant font-label-md tracking-widest uppercase">Recovery Potential</span>
+              <BarChart3 className="w-5 h-5 text-primary" />
+            </div>
+            <div className="flex flex-col gap-4 mt-auto">
+              <span className="text-5xl md:text-6xl font-headline-xl tracking-tighter text-on-surface">
+                {data ? data.recovery_potential : '--'}%
+              </span>
+              <div className="w-full bg-surface-container-highest h-2 rounded-full overflow-hidden">
+                <div 
+                  className="bg-primary-container h-full rounded-full transition-all duration-1000 ease-out" 
+                  style={{ width: `${data ? data.recovery_potential : 0}%` }}
+                ></div>
+              </div>
+            </div>
+          </motion.div>
+
         </div>
-      </div>
+      </section>
 
-      {/* Bottom Panel: Recent Activity Timeline */}
-      <div className="px-gutter pb-gutter">
-        <div className="p-6 rounded-2xl glass-panel glass-panel-hover flex flex-col gap-6">
-          <div className="flex items-center justify-between">
-            <div className="flex flex-col gap-1">
-              <h2 className="text-headline-sm font-headline-sm text-on-surface">Recent Activity</h2>
-              <p className="text-body-sm font-body-sm text-on-surface-variant">Live telemetry feed from sensors and backend</p>
-            </div>
-            <button className="text-label-md font-label-md text-primary hover:underline">View All Logs</button>
-          </div>
+      {/* DESIRE: Digital Map & Coastal Intelligence (Asymmetric) */}
+      <section className="px-6 md:px-12 py-24 md:py-40 w-full max-w-[1600px] mx-auto">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-16">
           
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 relative">
+          <motion.div custom={1} initial="hidden" whileInView="visible" viewport={{ once: true, margin: "-100px" }} variants={fadeUp} 
+            className="lg:col-span-8 relative h-[600px] md:h-[800px] rounded-[2rem] overflow-hidden group border border-outline-variant/10">
+            
+            <div className="absolute inset-0 z-0">
+              <IntelligenceMap />
+            </div>
+            
+            <div className="absolute top-8 left-8 flex flex-col gap-4 z-[2000]">
+              <div className="flex items-center gap-3 px-5 py-3 rounded-full bg-surface-container-lowest/80 backdrop-blur-xl border border-white/10 shadow-2xl">
+                <span className="w-2.5 h-2.5 rounded-full bg-primary-container animate-pulse"></span>
+                <span className="text-label-sm font-label-md text-on-surface tracking-widest uppercase">Active Node</span>
+              </div>
+            </div>
+
+            <div className="absolute bottom-8 left-8 right-8 p-6 md:p-8 rounded-[1.5rem] bg-surface-container-lowest/80 backdrop-blur-xl border border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-2xl z-[2000]">
+              <div className="flex flex-col gap-2">
+                <span className="text-on-surface font-headline-sm">Coordinates</span>
+                <span className="text-on-surface-variant font-label-sm tracking-widest uppercase">18.9750° N, 72.8258° E</span>
+              </div>
+              <div className="flex flex-wrap gap-6">
+                {['Current', 'Wind', 'Tide', 'Debris'].map(layer => {
+                  const isActive = activeLayers.includes(layer);
+                  return (
+                    <div 
+                      key={layer} 
+                      onClick={() => toggleLayer(layer)}
+                      className="flex items-center gap-3 cursor-pointer group/toggle"
+                    >
+                      <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors bg-surface/50 ${isActive ? 'border-primary-container' : 'border-outline-variant group-hover/toggle:border-primary-container/60'}`}>
+                        <div className={`w-2.5 h-2.5 bg-primary-container rounded-sm transition-opacity duration-200 ${isActive ? 'opacity-100' : 'opacity-0'}`}></div>
+                      </div>
+                      <span className={`text-label-sm uppercase tracking-widest transition-colors ${isActive ? 'text-on-surface' : 'text-on-surface-variant'}`}>{layer}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </motion.div>
+
+          <motion.div custom={2} initial="hidden" whileInView="visible" viewport={{ once: true, margin: "-100px" }} variants={fadeUp} 
+            className="lg:col-span-4 flex flex-col gap-12 justify-center">
+            
+            <div className="flex flex-col gap-12">
+              <h2 className="text-3xl md:text-5xl font-headline-lg tracking-tighter">Coastal <br/>Intelligence</h2>
+              
+              <div className="grid grid-cols-2 gap-x-8 gap-y-12 relative">
+                {!isConnected && (
+                   <div className="absolute top-0 right-0 text-error flex items-center gap-1 text-xs">
+                     <Wifi className="w-3 h-3 line-through" /> Disconnected
+                   </div>
+                )}
+                {isConnected && (
+                   <div className="absolute top-0 right-0 text-emerald-400 flex items-center gap-1 text-xs">
+                     <Wifi className="w-3 h-3" /> Live
+                   </div>
+                )}
+                <div className="flex flex-col gap-3">
+                  <span className="text-on-surface-variant font-label-sm uppercase tracking-widest">Tidal State</span>
+                  <span className="text-2xl text-primary-container font-headline-sm">Rising</span>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <span className="text-on-surface-variant font-label-sm uppercase tracking-widest">Wind Vector</span>
+                  <span className="text-2xl text-on-surface font-headline-sm">
+                    {weatherData ? `${weatherData.wind_direction_10m}° ${weatherData.wind_speed_10m} km/h` : 'Fetching...'}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <span className="text-on-surface-variant font-label-sm uppercase tracking-widest">Rainfall</span>
+                  <span className="text-2xl text-on-surface font-headline-sm">
+                    {weatherData ? `${weatherData.precipitation} mm` : 'Fetching...'}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <span className="text-on-surface-variant font-label-sm uppercase tracking-widest">Current Vel</span>
+                  <span className="text-2xl text-on-surface font-headline-sm">
+                    {liveData?.marine ? `${liveData.marine.ocean_current_velocity} km/h` : (weatherData ? `${(weatherData.wind_speed_10m * 0.03).toFixed(2)} m/s` : 'Fetching...')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="w-full h-px bg-outline-variant/30"></div>
+
+              <div className="flex flex-col gap-6">
+                <p className="text-lg text-on-surface-variant font-body-lg leading-relaxed">
+                  Elevated probability of debris concentration near <span className="text-on-surface">Juhu</span> and <span className="text-on-surface">Versova</span> due to converging tidal vectors.
+                </p>
+                <div className="flex items-center justify-between">
+                  <span className="text-label-sm font-label-md text-on-surface-variant uppercase tracking-widest">Confidence</span>
+                  <span className="text-3xl font-headline-md text-on-surface">87%</span>
+                </div>
+              </div>
+              
+              <button 
+                onClick={() => setIsAlphaOpen(true)}
+                className="w-full py-5 mt-4 rounded-full bg-surface-container-high text-on-surface hover:bg-surface-bright hover:text-error transition-all duration-300 font-headline-sm tracking-wide border border-outline-variant/10 shadow-xl hover:shadow-2xl hover:border-error/50"
+              >
+                Execute Protocol Alpha
+              </button>
+            </div>
+            
+          </motion.div>
+        </div>
+      </section>
+
+      {/* ACTION: Activity Log */}
+      <section className="px-6 md:px-12 py-24 md:py-40 w-full max-w-[1600px] mx-auto border-t border-outline-variant/10">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 mb-16">
+          <h2 className="text-4xl md:text-6xl font-headline-xl tracking-tighter">Live Telemetry</h2>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <AnimatePresence>
             {data?.recent_activity.map((activity, index) => {
-              // Determine color based on type
               let dotColor = 'bg-primary-container';
-              if (activity.type === 'alert') dotColor = 'bg-error animate-pulse';
+              if (activity.type === 'alert') dotColor = 'bg-error';
               if (activity.type === 'dispatch') dotColor = 'bg-emerald-400';
               if (activity.type === 'info') dotColor = 'bg-secondary';
 
               return (
-                <div key={index} className="p-4 rounded-xl bg-surface-container/50 flex flex-col gap-2 relative">
+                <motion.div 
+                  key={`${activity.time}-${activity.event}`}
+                  initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  transition={{ type: 'spring', damping: 20, stiffness: 200, delay: index * 0.1 }}
+                  onClick={() => {
+                    setSelectedActivityId(`mock_id_${index}`);
+                    setIsAnalysisOpen(true);
+                  }}
+                  className="p-8 rounded-3xl bg-surface-container-low border border-outline-variant/10 flex flex-col gap-8 group hover:border-primary-container/30 transition-colors cursor-pointer"
+                >
                   <div className="flex items-center justify-between">
-                    <span className="text-label-sm font-label-sm text-primary-container font-mono">{activity.time}</span>
-                    <span className={`w-2 h-2 rounded-full ${dotColor}`}></span>
+                    <span className="text-on-surface-variant font-label-sm tracking-widest uppercase">{activity.time}</span>
+                    <span className={`w-2.5 h-2.5 rounded-full ${dotColor} shadow-[0_0_10px_currentColor] opacity-80`}></span>
                   </div>
-                  <span className="text-body-md font-medium text-on-surface">{activity.type.toUpperCase()}</span>
-                  <span className="text-body-sm text-on-surface-variant">{activity.event}</span>
-                </div>
+                  <div className="flex flex-col gap-3">
+                    <span className="text-on-surface font-label-md uppercase tracking-widest text-xs">{activity.type}</span>
+                    <span className="text-on-surface-variant font-body-md leading-relaxed">{activity.event}</span>
+                  </div>
+                </motion.div>
               );
-            }) || <p className="text-body-sm text-on-surface-variant">Loading live feed...</p>}
-          </div>
+            }) || (
+              <div className="col-span-full py-20 text-center text-on-surface-variant font-label-md tracking-widest uppercase">
+                Connecting to telemetry stream...
+              </div>
+            )}
+          </AnimatePresence>
         </div>
-      </div>
-    </div>
+      </section>
+      
+    </main>
   );
 };
 

@@ -1,219 +1,238 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import random
-import time
-import os
 import json
+import asyncio
+import os
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-app = FastAPI(title="Tidal Backend API", version="1.0.0")
+# New ML and Services
+from realtime import manager, live_data_broadcaster
+from services.environment import env_service
+from services.drift import drift_engine
+from services.vision import vision_service
+from services.dispatch import dispatch_service
+from ml.model import risk_model
+from ml.features import extract_features
 
-# Enable CORS for the frontend
+load_dotenv()
+
+app = FastAPI(title="Tidal Backend API", version="2.0.0")
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(live_data_broadcaster())
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow frontend origin
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # --- MODELS ---
-
 class ScenarioModifier(BaseModel):
     wind_speed: int
     rainfall_increase: int
     barrier_efficiency: int
     cleanup_teams: int
 
-# --- ROUTES ---
+class DispatchRequest(BaseModel):
+    hotspots: list
 
+class ChatMessage(BaseModel):
+    message: str
+
+# --- ROUTES ---
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "Tidal Backend is running"}
+    return {"status": "ok", "message": "Tidal Backend v2 is running"}
+
+@app.websocket("/ws/live")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
 
 @app.get("/api/v1/telemetry/summary")
 def get_telemetry_summary():
-    """Returns aggregated data for the Overview dashboard."""
+    now = datetime.now()
+    live_env = env_service.get_current_data()
+    
+    # Feature extraction for overall Mumbai risk
+    features = extract_features(live_env, 19.10, 72.82)
+    predicted_debris = int(risk_model.predict(features) * 100) # Base multiplier for the hackathon
+    
     return {
-        "predicted_debris": 2800,
-        "high_risk_zones": 7,
+        "predicted_debris": predicted_debris,
+        "high_risk_zones": 3 if predicted_debris < 2800 else (6 if predicted_debris < 3000 else 8),
         "cleanup_teams_active": 12,
-        "recovery_potential": 68,
+        "recovery_potential": max(40, 95 - int(features["wind_speed"] * 0.5)),
         "recent_activity": [
-            {"time": "08:20", "event": "Sector 4 (Versova Creek) reported floating polymer clusters.", "type": "info"},
-            {"time": "09:05", "event": "Inflow velocity spiked by 15% across northern drainage points.", "type": "info"},
-            {"time": "10:10", "event": "Juhu beach risk tier shifted to Critical. Automated alert dispatched.", "type": "alert"},
-            {"time": "11:30", "event": "Vessel TIDAL-SKIM-02 mobilized to Bandra shoreline.", "type": "dispatch"},
+            {"time": (now - timedelta(minutes=6)).strftime("%H:%M"), "event": "Sector 4 (Versova Creek) reported floating polymer clusters.", "type": "info"},
+            {"time": (now - timedelta(minutes=25)).strftime("%H:%M"), "event": f"XGBoost detected elevated beaching probability.", "type": "alert"},
+            {"time": (now - timedelta(minutes=95)).strftime("%H:%M"), "event": "Vessel TIDAL-SKIM-02 mobilized to Bandra shoreline.", "type": "dispatch"},
         ]
     }
 
 @app.post("/api/v1/simulate/scenario")
 def run_simulation(scenario: ScenarioModifier):
-    """
-    Simulates debris accumulation based on environmental modifiers.
-    Uses a mock algorithmic response for the hackathon.
-    """
-    base_debris = 62
+    # This now utilizes the Monte-Carlo drift engine implicitly by overriding env_data
+    live_env = env_service.get_current_data() or {"weather": {}, "marine": {}}
+    if "weather" not in live_env: live_env["weather"] = {}
+    live_env["weather"]["wind_speed_10m"] = scenario.wind_speed
     
-    # Very simple mock logic for the simulation
-    wind_impact = (scenario.wind_speed - 18) * 0.5
-    rain_impact = (scenario.rainfall_increase - 12) * 0.4
-    barrier_mitigation = (scenario.barrier_efficiency / 100) * 20
-    cleanup_mitigation = scenario.cleanup_teams * 2
+    res = drift_engine.simulate_drift_monte_carlo(19.10, 72.70, live_env, hours=24, num_particles=500)
+    beached_perc = res["beached_percent_final"]
     
-    net_impact = wind_impact + rain_impact - barrier_mitigation - cleanup_mitigation
-    predicted = max(5, int(base_debris + net_impact))
+    predicted = int(62 + beached_perc * 2.5 + scenario.rainfall_increase * 1.5 - scenario.barrier_efficiency * 0.5)
+    
+    curve_data = [int(p["beached_percent"]) for p in res["trajectory"]]
     
     return {
-        "predicted_accumulation_kg": predicted,
-        "peak_risk_time_hours": 36 if net_impact > 10 else 72,
-        "curve_data": [],
-        "ai_confidence": 92 if scenario.wind_speed < 40 else 75
+        "predicted_accumulation_kg": max(5, predicted),
+        "peak_risk_time_hours": 36,
+        "curve_data": curve_data,
+        "ai_confidence": 85
     }
 
 @app.get("/api/v1/hotspots/spatial")
 def get_hotspots():
-    """Returns data for the Hotspot Ranking."""
-    return [
-        {
-            "zone_name": "Juhu",
-            "lat": 19.103,
-            "lon": 72.825,
-            "risk_percentage": 94,
-            "estimated_debris_kg": 420,
-            "peak_arrival_hours": 18,
-            "severity": "Critical"
-        },
-        {
-            "zone_name": "Versova",
-            "lat": 19.135,
-            "lon": 72.814,
-            "risk_percentage": 82,
-            "estimated_debris_kg": 310,
-            "peak_arrival_hours": 26,
-            "severity": "High"
-        },
-        {
-            "zone_name": "Bandra",
-            "lat": 19.049,
-            "lon": 72.818,
-            "risk_percentage": 61,
-            "estimated_debris_kg": 190,
-            "peak_arrival_hours": 34,
-            "severity": "Medium"
-        }
+    live_env = env_service.get_current_data()
+    
+    zones = [
+        {"name": "Juhu", "lat": 19.103, "lon": 72.825},
+        {"name": "Versova", "lat": 19.135, "lon": 72.814},
+        {"name": "Bandra", "lat": 19.049, "lon": 72.818}
     ]
+    
+    hotspots = []
+    for z in zones:
+        feat = extract_features(live_env, z["lat"], z["lon"])
+        pred_kg = int(risk_model.predict(feat) * 50) # zone multiplier
+        
+        # Explainability via SHAP-like contributions
+        contribs = risk_model.get_feature_contributions(feat)
+        top_driver = list(contribs.keys())[0] if contribs else "wind_speed"
+        
+        risk_pct = min(100, int((pred_kg / 500) * 100))
+        severity = "Critical" if risk_pct > 80 else ("High" if risk_pct > 50 else "Medium")
+        
+        hotspots.append({
+            "zone_name": z["name"],
+            "lat": z["lat"],
+            "lon": z["lon"],
+            "risk_percentage": risk_pct,
+            "estimated_debris_kg": pred_kg,
+            "peak_arrival_hours": 18,
+            "severity": severity,
+            "top_driver": f"{top_driver} ({contribs.get(top_driver, 0):.1f})"
+        })
+        
+    return hotspots
 
-@app.get("/api/v1/recovery/materials")
-def get_recovery_materials():
-    """Returns material breakdown for the Circular Recovery dashboard."""
-    return {
-        "total_recovered_tons": 1.24,
-        "recyclable_percentage": 68,
-        "upcyclable_percentage": 21,
-        "residual_percentage": 11,
-        "categories": {
-            "PET": { "weight_kg": 420, "percentage": 33.8 },
-            "PP": { "weight_kg": 280, "percentage": 22.5 },
-            "FishingNets": { "weight_kg": 190, "percentage": 15.3 },
-            "MixedPlastics": { "weight_kg": 220, "percentage": 17.7 },
-            "Other": { "weight_kg": 130, "percentage": 10.7 }
-        }
-    }
+from services.store import store_service
+import uuid
 
 @app.post("/api/v1/recovery/observation")
 async def report_observation(file: UploadFile = File(...)):
-    """
-    AI Feature 1: Vision-to-Value Segregation using Gemini Vision API.
-    Identifies marine debris materials and suggests circular economy pathways.
-    """
+    unique_id = uuid.uuid4().hex
+    temp_file_path = f"temp_{unique_id}_{file.filename}"
+    with open(temp_file_path, "wb") as f:
+        f.write(await file.read())
+
+    # 1. YOLOv8 / YOLO11 vision detection + CLAHE
+    vision_result = vision_service.detect_debris(temp_file_path)
+    
+    # 2. Gemini material analysis
     try:
-        # Save the uploaded file temporarily
-        temp_file_path = f"temp_{file.filename}"
-        with open(temp_file_path, "wb") as f:
-            f.write(await file.read())
-
-        # Initialize the GenAI client (ensure GEMINI_API_KEY is in environment or passed)
-        client = genai.Client()
-
-        # Upload the file to Gemini
-        genai_file = client.files.upload(file=temp_file_path)
-
-        prompt = """
-        Analyze this image of marine debris/waste.
-        Provide a JSON response with the following keys:
-        - composition: A short string describing the main materials you see (e.g., 'Mainly PET bottles and some fishing nets').
-        - category: One of ['Highly Recyclable', 'Upcyclable', 'Residual/Mixed'].
-        - matched_upcycler: A fictional or real name of an organization that could process this waste (e.g., 'Econet Solutions').
-        - estimated_weight_kg: An integer estimating the weight of the items shown, just guess.
-        
-        Ensure your response is valid JSON and nothing else.
-        """
-
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=[genai_file, prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-            ),
-        )
-        
-        # Clean up
-        os.remove(temp_file_path)
-        client.files.delete(name=genai_file.name)
-        
-        # Parse result
-        result = json.loads(response.text)
-        
-        return {
-            "status": "success",
-            "ai_analysis": {
-                "composition": result.get("composition", "Unknown"),
-                "estimated_weight_kg": result.get("estimated_weight_kg", 5),
-                "category": result.get("category", "Unknown")
-            },
-            "matched_upcycler": result.get("matched_upcycler", "Local Recycling Facility")
-        }
-
+        gemini_json_str = vision_service.analyze_material_gemini(temp_file_path)
+        gemini_result = json.loads(gemini_json_str)
     except Exception as e:
-        print("Error during AI processing:", str(e))
-        # Fallback response for hackathon demo if API fails
-        return {
-            "status": "fallback",
-            "ai_analysis": {
-                "composition": "Looks like Fishing Nets and PET bottles",
-                "estimated_weight_kg": 15,
-                "category": "Upcyclable"
-            },
-            "matched_upcycler": "Econet India Solutions"
+        gemini_result = {
+            "composition": "Fallback: Fishing Nets and PET",
+            "category": "Upcyclable",
+            "matched_upcycler": "Econet India Solutions",
+            "estimated_weight_kg": 15
         }
+        
+    ai_analysis = {
+        "composition": gemini_result.get("composition", "Unknown"),
+        "estimated_weight_kg": gemini_result.get("estimated_weight_kg", 5),
+        "category": gemini_result.get("category", "Unknown"),
+        "item_count": vision_result.get("item_count", 0),
+        "bounding_boxes": vision_result.get("bounding_boxes", [])
+    }
+    
+    matched_upcycler = gemini_result.get("matched_upcycler", "Local Recycling")
+    
+    # 3. Save to Store
+    store_service.save_field_report(ai_analysis, matched_upcycler, temp_file_path)
+        
+    if os.path.exists(temp_file_path):
+        os.remove(temp_file_path)
+    
+    return {
+        "status": "success",
+        "ai_analysis": ai_analysis,
+        "matched_upcycler": matched_upcycler
+    }
 
-class ChatMessage(BaseModel):
-    message: str
+@app.get("/api/v1/simulate/predictive")
+async def get_drift_trajectory(lat: float, lon: float):
+    live_env = env_service.get_current_data()
+    # Now calls the Monte-Carlo engine but just extracts the center trajectory
+    res = drift_engine.simulate_drift_monte_carlo(lat, lon, live_env, hours=72, num_particles=100)
+    return {
+        "start_point": {"lat": lat, "lon": lon},
+        "forecast_hours": 72,
+        "trajectory": res["trajectory"]
+    }
+
+@app.post("/api/v1/dispatch/optimize")
+async def optimize_dispatch(request: DispatchRequest):
+    fleet = [
+        {"vessel": "TIDAL-SKIM-01", "capacity_kg": 500, "current_location": "Base A"},
+        {"vessel": "AQUA-SWEEP-ALPHA", "capacity_kg": 300, "current_location": "Base B"},
+        {"vessel": "TIDAL-SKIM-02", "capacity_kg": 600, "current_location": "Base A"},
+    ]
+    
+    # 1. Deterministic Hungarian Algorithm Optimization
+    assignments = dispatch_service.optimize_dispatch(request.hotspots, fleet)
+    
+    # 2. Gemini natural language explanation
+    try:
+        explanations_str = dispatch_service.explain_assignment(assignments)
+        explanations = json.loads(explanations_str)
+        # Merge reasoning
+        for a in assignments:
+            for exp in explanations:
+                if exp.get("vessel_name") == a["vessel_name"]:
+                    a["reasoning"] = exp.get("reasoning", "Optimal route based on capacity and distance.")
+    except:
+        for a in assignments:
+            a["reasoning"] = "Optimal route based on capacity and distance (Hungarian Match)."
+            
+    return assignments
 
 @app.post("/api/v1/chat")
 async def chat_with_data(chat: ChatMessage):
-    """
-    AI Feature: Ocean-GPT Conversational Data Assistant.
-    Allows users to query the platform data using natural language.
-    """
+    # Live data Context
+    live_env = env_service.get_current_data()
     try:
         client = genai.Client()
-        
-        # System instructions to ground the model
-        system_instruction = """
+        system_instruction = f"""
         You are Ocean-GPT, an AI assistant for the Tidal Marine Intelligence Platform.
-        Your goal is to answer questions about marine debris, cleanup operations, and hotspots.
-        You have access to the following current data (for Arambh'26 hackathon):
-        - Total recovered plastic: 1.24 tons.
-        - Hotspots: Juhu (Critical, 94% risk, 420kg debris), Versova (High, 82% risk), Bandra (Medium).
-        - Material Breakdown: PET (33.8%), PP (22.5%), Fishing Nets (15.3%).
-        - Active cleanup teams: 12.
-        Keep answers short, professional, and directly address the user's question using this data.
+        Current Live Data context:
+        - Env: {json.dumps(live_env)}
         """
-        
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=chat.message,
@@ -222,112 +241,6 @@ async def chat_with_data(chat: ChatMessage):
                 temperature=0.3
             )
         )
-        
         return {"response": response.text}
-        
     except Exception as e:
-        print("Error during chat generation:", str(e))
-        # Fallback for hackathon demo if API key is not present
-        lowercase_msg = chat.message.lower()
-        if "juhu" in lowercase_msg:
-            fallback = "Juhu is currently categorized as a Critical risk zone with a 94% risk factor and an estimated 420kg of incoming debris. Peak arrival is expected in 18 hours."
-        elif "pet" in lowercase_msg or "material" in lowercase_msg:
-            fallback = "We have recovered 1.24 tons of material total. PET makes up 33.8% (420kg) of the recovery, followed by PP at 22.5%."
-        elif "team" in lowercase_msg or "active" in lowercase_msg:
-            fallback = "There are currently 12 cleanup teams active across all monitored zones."
-        else:
-            fallback = "I'm Ocean-GPT. The Tidal platform has successfully diverted 1.24 tons of plastic. Juhu and Versova are currently our highest priority hotspots. How can I help you route our 12 active cleanup teams?"
-            
-        return {"response": fallback}
-
-
-@app.get("/api/v1/simulate/predictive")
-async def get_drift_trajectory(lat: float, lon: float):
-    """
-    AI Feature: Predictive Debris Drift Modeling.
-    Provides a 72-hour forecast trajectory for a specific debris cluster.
-    """
-    # Mocking a realistic physical drift using a simple walk for demonstration
-    trajectory = []
-    current_lat = lat
-    current_lon = lon
-    
-    for hour in range(0, 73, 6): # Every 6 hours up to 72 hours
-        # Add random walk bias depending on typical current patterns (e.g. moving South-West)
-        lat_shift = random.uniform(-0.005, -0.001)
-        lon_shift = random.uniform(-0.004, 0.002)
-        
-        current_lat += lat_shift
-        current_lon += lon_shift
-        
-        trajectory.append({
-            "hour": hour,
-            "lat": current_lat,
-            "lon": current_lon,
-            "confidence": max(10, 95 - int(hour * 0.8)) # Confidence degrades over time
-        })
-        
-    return {
-        "start_point": {"lat": lat, "lon": lon},
-        "forecast_hours": 72,
-        "trajectory": trajectory
-    }
-
-class DispatchRequest(BaseModel):
-    hotspots: list
-
-@app.post("/api/v1/dispatch/optimize")
-async def optimize_dispatch(request: DispatchRequest):
-    """
-    AI Feature: Dynamic Fleet Dispatch & Routing AI.
-    Uses Gemini to optimize vessel assignment to hotspots.
-    """
-    try:
-        client = genai.Client()
-        
-        # Mock active fleet
-        fleet = [
-            {"vessel": "TIDAL-SKIM-01", "capacity_kg": 500, "current_location": "Base A"},
-            {"vessel": "AQUA-SWEEP-ALPHA", "capacity_kg": 300, "current_location": "Base B"},
-            {"vessel": "TIDAL-SKIM-02", "capacity_kg": 600, "current_location": "Base A"},
-        ]
-
-        system_instruction = """
-        You are an AI Dispatch Commander. Assign cleanup vessels to the provided hotspots to maximize recovery and efficiency.
-        Respond ONLY with a valid JSON array of objects.
-        Each object must have exactly these keys: vessel_name, target_zone, eta_hours (integer), estimated_recovery_kg (integer), reasoning (short string).
-        """
-        
-        prompt = f"Hotspots: {request.hotspots}\nAvailable Fleet: {fleet}"
-
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.2,
-                response_mime_type="application/json"
-            )
-        )
-        
-        return json.loads(response.text)
-
-    except Exception as e:
-        print("Error during dispatch optimization:", str(e))
-        # Fallback for hackathon demo if API key is not present
-        return [
-            {
-                "vessel_name": "TIDAL-SKIM-01",
-                "target_zone": "Juhu",
-                "eta_hours": 2,
-                "estimated_recovery_kg": 420,
-                "reasoning": "Juhu is Critical. Assigned highest capacity vessel."
-            },
-            {
-                "vessel_name": "AQUA-SWEEP-ALPHA",
-                "target_zone": "Versova",
-                "eta_hours": 3,
-                "estimated_recovery_kg": 300,
-                "reasoning": "Versova is High risk. Assigned secondary vessel."
-            }
-        ]
+        return {"response": "Ocean-GPT: I'm running in offline fallback mode."}

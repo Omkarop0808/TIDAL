@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+python-dotenv
+google-genai
+groq
+xgboost
+numpy
+pandas
+scipy
+ultralytics
+opencv-python-headless
+apscheduler
+requests
+scikit-learn
+python-multipart

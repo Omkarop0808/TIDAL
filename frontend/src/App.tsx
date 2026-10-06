@@ -5,6 +5,7 @@ import Overview from './pages/Overview';
 import Simulate from './pages/Simulate';
 import Hotspots from './pages/Hotspots';
 import CircularRecovery from './pages/CircularRecovery';
+import ModelLab from './pages/ModelLab';
 import OceanGPTWidget from './components/chat/OceanGPTWidget';
 
 function App() {
@@ -21,8 +22,10 @@ function App() {
               <Route path="/simulate" element={<Simulate />} />
               <Route path="/hotspots" element={<Hotspots />} />
               <Route path="/circular-recovery" element={<CircularRecovery />} />
+              <Route path="/model-lab" element={<ModelLab />} />
             </Routes>
           </main>
+
         </div>
         <OceanGPTWidget />
       </div>
